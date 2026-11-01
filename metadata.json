@@ -1,0 +1,6 @@
+{
+  "name": "TableGrid OCR - Schedule Table Extractor",
+  "description": "Client-side schedule table OCR using OpenCV.js morphological grid projection, union-find cell merging, and Tesseract.js PSM 6 recognition.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
