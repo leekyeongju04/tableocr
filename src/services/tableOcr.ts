@@ -96,11 +96,14 @@ export async function runOcrOnMergedCells(
     const cropW = Math.max(1, w - 2 * insetX);
     const cropH = Math.max(1, h - 2 * insetY);
 
-    cropCanvas.width = cropW * OCR_SCALE + 2 * PAD;
-    cropCanvas.height = cropH * OCR_SCALE + 2 * PAD;
+    const canvasW = cropW * OCR_SCALE + 2 * PAD;
+    const canvasH = cropH * OCR_SCALE + 2 * PAD;
 
-    cropCtx.fillStyle = '#fff';
-    cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
+    cropCanvas.width = canvasW;
+    cropCanvas.height = canvasH;
+
+    cropCtx.fillStyle = '#ffffff';
+    cropCtx.fillRect(0, 0, canvasW, canvasH);
     cropCtx.imageSmoothingQuality = 'high';
     cropCtx.drawImage(
       sourceCanvas,
@@ -114,6 +117,52 @@ export async function runOcrOnMergedCells(
       cropH * OCR_SCALE
     );
 
+    const baseImgData = cropCtx.getImageData(0, 0, canvasW, canvasH);
+    const baseData = baseImgData.data;
+
+    // Helper: a pixel is "red" if r>g+60 && r>b+60 && r>80
+    const isRedPixel = (r: number, g: number, b: number): boolean => {
+      return r > g + 60 && r > b + 60 && r > 80;
+    };
+
+    // Find the cell background = most frequent color (quantized 4 bits/channel)
+    // and count red pixels in the cropped region
+    const key = (r: number, g: number, b: number) => `${r >> 4},${g >> 4},${b >> 4}`;
+    const freq = new Map<string, [number, number, number, number]>();
+    let redPixelCount = 0;
+
+    for (let y = PAD; y < canvasH - PAD; y++) {
+      const rowOffset = y * canvasW;
+      for (let x = PAD; x < canvasW - PAD; x++) {
+        const p = (rowOffset + x) * 4;
+        const r = baseData[p];
+        const g = baseData[p + 1];
+        const b = baseData[p + 2];
+
+        if (isRedPixel(r, g, b)) {
+          redPixelCount++;
+        }
+
+        const k = key(r, g, b);
+        const entry = freq.get(k) || [r, g, b, 0];
+        entry[3]++;
+        freq.set(k, entry);
+      }
+    }
+
+    let bgR = 255;
+    let bgG = 255;
+    let bgB = 255;
+    let maxCount = -1;
+    for (const entry of freq.values()) {
+      if (entry[3] > maxCount) {
+        maxCount = entry[3];
+        bgR = entry[0];
+        bgG = entry[1];
+        bgB = entry[2];
+      }
+    }
+
     if (onProgress) {
       onProgress({
         current: i + 1,
@@ -124,23 +173,70 @@ export async function runOcrOnMergedCells(
     }
 
     try {
-      // Request blocks to ensure line-level bounding box hierarchy in modern Tesseract.js
-      const ocrResult = await worker.recognize(
-        cropCanvas,
+      // =========================================================================
+      // PASS A (subject + section):
+      // Output pixel = BLACK if differs from background by |dr|+|dg|+|db| > 100 AND is not red;
+      // otherwise WHITE. Red pixels are erased (white).
+      // =========================================================================
+      const passACanvas = document.createElement('canvas');
+      passACanvas.width = canvasW;
+      passACanvas.height = canvasH;
+      const passACtx = passACanvas.getContext('2d');
+      if (!passACtx) throw new Error('Failed to create context for Pass A.');
+
+      const passAImgData = passACtx.createImageData(canvasW, canvasH);
+      const passAData = passAImgData.data;
+
+      for (let p = 0; p < baseData.length; p += 4) {
+        const r = baseData[p];
+        const g = baseData[p + 1];
+        const b = baseData[p + 2];
+
+        const dr = Math.abs(r - bgR);
+        const dg = Math.abs(g - bgG);
+        const db = Math.abs(b - bgB);
+
+        const isRed = isRedPixel(r, g, b);
+        const isDiffFromBg = dr + dg + db > 100;
+
+        if (isDiffFromBg && !isRed) {
+          passAData[p] = 0;
+          passAData[p + 1] = 0;
+          passAData[p + 2] = 0;
+          passAData[p + 3] = 255;
+        } else {
+          passAData[p] = 255;
+          passAData[p + 1] = 255;
+          passAData[p + 2] = 255;
+          passAData[p + 3] = 255;
+        }
+      }
+      passACtx.putImageData(passAImgData, 0, 0);
+
+      // OCR Pass A with single worker
+      const ocrResultA = await worker.recognize(
+        passACanvas,
         {},
-        { blocks: true, text: true }
+        { blocks: true }
       );
-      const rawText = ocrResult?.data?.text || '';
-      // Clean up whitespace, trim trailing newlines
-      const cleanedText = rawText
-        .split('\n')
-        .map((line: string) => line.trim())
-        .filter(Boolean)
-        .join(' ');
 
-      const confidence = ocrResult?.data?.confidence || 0;
+      // Read lines from data.blocks[].paragraphs[].lines[]
+      const rawLinesA: any[] = [];
+      if (Array.isArray(ocrResultA?.data?.blocks)) {
+        for (const block of ocrResultA.data.blocks) {
+          if (Array.isArray(block.paragraphs)) {
+            for (const para of block.paragraphs) {
+              if (Array.isArray(para.lines)) {
+                for (const line of para.lines) {
+                  rawLinesA.push(line);
+                }
+              }
+            }
+          }
+        }
+      }
 
-      // Coordinate un-scaling mapper back to original cell crop space
+      // Map OCR line bboxes back to crop coordinates: x = (x - PAD) / OCR_SCALE, same for y
       const back = (b: { x0: number; y0: number; x1: number; y1: number }) => ({
         x0: Math.max(0, (b.x0 - PAD) / OCR_SCALE),
         y0: Math.max(0, (b.y0 - PAD) / OCR_SCALE),
@@ -148,41 +244,129 @@ export async function runOcrOnMergedCells(
         y1: Math.min(cropH, (b.y1 - PAD) / OCR_SCALE),
       });
 
-      // Extract line-level output with bounding boxes from blocks hierarchy or top-level lines
-      let rawLines: any[] = [];
-      if (Array.isArray(ocrResult?.data?.lines) && ocrResult.data.lines.length > 0) {
-        rawLines = ocrResult.data.lines;
-      } else if (Array.isArray(ocrResult?.data?.blocks)) {
-        for (const block of ocrResult.data.blocks) {
-          if (Array.isArray(block.paragraphs)) {
-            for (const para of block.paragraphs) {
-              if (Array.isArray(para.lines)) {
-                rawLines.push(...para.lines);
+      const lines: OcrLine[] = rawLinesA
+        .filter((l: any) => (l.text || '').trim().length > 0)
+        .map((l: any) => ({
+          text: (l.text || '').trim(),
+          bbox: back(l.bbox || { x0: PAD, y0: PAD, x1: canvasW - PAD, y1: canvasH - PAD }),
+          confidence: l.confidence || 0,
+        }));
+
+      const rawTextA = (ocrResultA?.data?.text || '').trim();
+      const cleanedText = lines.map((l) => l.text).join(' ').trim();
+
+      // If a non-empty cell returns no line boxes, throw an Error naming the row and column
+      if (rawTextA.length > 0 && lines.length === 0) {
+        throw new Error(
+          `Cell [Row ${cell.row}, Col ${cell.col}] has non-empty text "${rawTextA}", but no line bounding boxes were detected.`
+        );
+      }
+
+      // =========================================================================
+      // PASS B (room, red text only):
+      // Count red pixels in the cropped region. If fewer than 30, skip this pass and set cell.roomText = ''.
+      // Otherwise output BLACK where pixel is red, WHITE elsewhere, then dilate black pixels by 1px (3x3).
+      // =========================================================================
+      let roomText = '';
+
+      if (redPixelCount < 30) {
+        roomText = '';
+      } else {
+        // Precompute red grid for dilation
+        const isRedGrid = new Uint8Array(canvasW * canvasH);
+        for (let idx = 0; idx < canvasW * canvasH; idx++) {
+          const p = idx * 4;
+          if (isRedPixel(baseData[p], baseData[p + 1], baseData[p + 2])) {
+            isRedGrid[idx] = 1;
+          }
+        }
+
+        const passBCanvas = document.createElement('canvas');
+        passBCanvas.width = canvasW;
+        passBCanvas.height = canvasH;
+        const passBCtx = passBCanvas.getContext('2d');
+        if (!passBCtx) throw new Error('Failed to create context for Pass B.');
+
+        const passBImgData = passBCtx.createImageData(canvasW, canvasH);
+        const passBData = passBImgData.data;
+
+        // Dilate the black pixels by 1px (3x3) so thin strokes survive
+        for (let y = 0; y < canvasH; y++) {
+          const rowOffset = y * canvasW;
+          for (let x = 0; x < canvasW; x++) {
+            let hasRedNeighbor = false;
+
+            for (let dy = -1; dy <= 1; dy++) {
+              const ny = y + dy;
+              if (ny < 0 || ny >= canvasH) continue;
+              const nRowOffset = ny * canvasW;
+              for (let dx = -1; dx <= 1; dx++) {
+                const nx = x + dx;
+                if (nx < 0 || nx >= canvasW) continue;
+                if (isRedGrid[nRowOffset + nx] === 1) {
+                  hasRedNeighbor = true;
+                  break;
+                }
+              }
+              if (hasRedNeighbor) break;
+            }
+
+            const p = (rowOffset + x) * 4;
+            if (hasRedNeighbor) {
+              passBData[p] = 0;
+              passBData[p + 1] = 0;
+              passBData[p + 2] = 0;
+              passBData[p + 3] = 255;
+            } else {
+              passBData[p] = 255;
+              passBData[p + 1] = 255;
+              passBData[p + 2] = 255;
+              passBData[p + 3] = 255;
+            }
+          }
+        }
+        passBCtx.putImageData(passBImgData, 0, 0);
+
+        // Run OCR Pass B sequentially with the SAME worker
+        const ocrResultB = await worker.recognize(
+          passBCanvas,
+          {},
+          { blocks: true }
+        );
+
+        const rawLinesB: string[] = [];
+        if (Array.isArray(ocrResultB?.data?.blocks)) {
+          for (const block of ocrResultB.data.blocks) {
+            if (Array.isArray(block.paragraphs)) {
+              for (const para of block.paragraphs) {
+                if (Array.isArray(para.lines)) {
+                  for (const line of para.lines) {
+                    const txt = (line.text || '').trim();
+                    if (txt.length > 0) {
+                      rawLinesB.push(txt);
+                    }
+                  }
+                }
               }
             }
           }
         }
-      }
 
-      const lines: OcrLine[] = rawLines
-        .map((l: any) => ({
-          text: (l.text || '').trim(),
-          bbox: back(l.bbox || { x0: PAD, y0: PAD, x1: cropW * OCR_SCALE + PAD, y1: cropH * OCR_SCALE + PAD }),
-          confidence: l.confidence || 0,
-        }))
-        .filter((l: OcrLine) => l.text.length > 0);
+        roomText = rawLinesB.join(' ').trim();
 
-      // Strict requirement: No guessing fallback. Throw if there are no lines when text is present.
-      if (lines.length === 0 && rawText.trim().length > 0) {
-        throw new Error(
-          `OCR produced text "${rawText.trim()}" in cell [Row ${cell.row}, Col ${cell.col}], but no line bounding boxes were detected.`
-        );
+        // If red pixels >= 30 and the result is empty, throw an Error naming the cell's row and column
+        if (!roomText) {
+          throw new Error(
+            `Cell [Row ${cell.row}, Col ${cell.col}] has ${redPixelCount} red pixels, but no room text could be recognized.`
+          );
+        }
       }
 
       const updatedCell: MergedCell = {
         ...cell,
         text: cleanedText,
-        confidence,
+        roomText,
+        confidence: ocrResultA?.data?.confidence || 0,
         lines,
       };
 
@@ -194,11 +378,13 @@ export async function runOcrOnMergedCells(
           total,
           percent: Math.round(((i + 1) / total) * 100),
           currentCellText: cleanedText,
-          statusText: `Processed cell ${i + 1}/${total}: "${cleanedText.slice(0, 24)}"`,
+          statusText: `Processed cell ${i + 1}/${total}: "${cleanedText.slice(0, 24)}"${
+            roomText ? ` [Room: ${roomText}]` : ''
+          }`,
         });
       }
     } catch (err: any) {
-      // Strict requirement: Never swallow OCR errors. Rethrow with row and column.
+      // Do NOT push an empty cell. Rethrow with row and column.
       throw new Error(
         `OCR failed on cell [Row ${cell.row}, Col ${cell.col}]: ${err?.message || err}`
       );

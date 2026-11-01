@@ -41,6 +41,7 @@ export interface OcrLine {
 export interface MergedCell {
   id: string;
   text: string;
+  roomText: string;
   row: number;
   col: number;
   rowspan: number;

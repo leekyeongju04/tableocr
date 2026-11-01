@@ -9,7 +9,10 @@ import {
   SkippedCell,
   TimeInterval,
   ScheduleParseResult,
+  TeachingHoursVerification,
+  DayTeachingHoursCheck,
 } from '../types/schedule';
+import { to12Hour } from '../utils/time';
 
 /**
  * Normalizes section candidate according to rule:
@@ -49,68 +52,6 @@ export function normalizeAndMatchSection(lineText: string): string | null {
   return null;
 }
 
-/**
- * Test if a line's text pixels are red in the original image:
- * "Room = lines whose dark text pixels are red in the original image (R>G+60 && R>B+60)."
- */
-export function isLineRedInk(
-  sourceCanvas: HTMLCanvasElement,
-  cellBbox: { x: number; y: number; w: number; h: number },
-  lineBbox: { x0: number; y0: number; x1: number; y1: number }
-): boolean {
-  const ctx = sourceCanvas.getContext('2d');
-  if (!ctx) return false;
-
-  const insetX = Math.max(2, Math.min(6, Math.floor(cellBbox.w * 0.04)));
-  const insetY = Math.max(2, Math.min(6, Math.floor(cellBbox.h * 0.04)));
-  const cropX = Math.max(0, cellBbox.x + insetX);
-  const cropY = Math.max(0, cellBbox.y + insetY);
-
-  const x0 = Math.max(0, Math.floor(cropX + lineBbox.x0));
-  const y0 = Math.max(0, Math.floor(cropY + lineBbox.y0));
-  const x1 = Math.min(sourceCanvas.width, Math.ceil(cropX + lineBbox.x1));
-  const y1 = Math.min(sourceCanvas.height, Math.ceil(cropY + lineBbox.y1));
-
-  const w = x1 - x0;
-  const h = y1 - y0;
-  if (w <= 0 || h <= 0) return false;
-
-  const imgData = ctx.getImageData(x0, y0, w, h);
-  const data = imgData.data;
-
-  // before the loop: background = most frequent quantized color in the region
-  const key = (r: number, g: number, b: number) => `${r >> 4},${g >> 4},${b >> 4}`;
-  const freq = new Map<string, [number, number, number, number]>();
-  for (let i = 0; i < data.length; i += 4) {
-    const k = key(data[i], data[i + 1], data[i + 2]);
-    const e = freq.get(k) || [data[i], data[i + 1], data[i + 2], 0];
-    e[3]++;
-    freq.set(k, e);
-  }
-  const bg = [...freq.values()].sort((a, b) => b[3] - a[3])[0];
-  if (!bg) return false;
-
-  let redTextCount = 0;
-  let totalDarkCount = 0;
-
-  for (let i = 0; i < data.length; i += 4) {
-    const r = data[i];
-    const g = data[i + 1];
-    const b = data[i + 2];
-
-    // in the loop: ink = differs from background, not "dark"
-    const dist = Math.abs(r - bg[0]) + Math.abs(g - bg[1]) + Math.abs(b - bg[2]);
-    if (dist > 120) {
-      totalDarkCount++;
-      if (r > g + 60 && r > b + 60) {
-        redTextCount++;
-      }
-    }
-  }
-
-  // Red line if at least 6 red pixels AND red pixels represent >= 15% of ink pixels
-  return redTextCount >= 6 && totalDarkCount > 0 && redTextCount / totalDarkCount >= 0.15;
-}
 
 function to24(h: number, m: number, pm: boolean): number {
   return ((h % 12) + (pm ? 12 : 0)) * 60 + m;
@@ -397,27 +338,12 @@ export function parseScheduleEntries(
 
     // Inspect lines
     const lines = cell.lines || [];
+    const room = (cell.roomText || '').trim();
 
+    // 1. Identify Section line matching ^[A-Z]{3,5}\d(\.\d)?[A-Z]?$ (normalize O->0, I/l->1)
     let sectionCandidate: string | null = null;
     let sectionLineIndex = -1;
-    let roomCandidate: string = '';
-    const redLineIndices = new Set<number>();
-
-    // 1. Identify Room lines via red pixel test (R>G+60 && R>B+60)
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const isRed = isLineRedInk(sourceCanvas, cell.bbox, line.bbox);
-      if (isRed) {
-        redLineIndices.add(i);
-        if (!roomCandidate) {
-          roomCandidate = line.text.trim();
-        }
-      }
-    }
-
-    // 2. Identify Section line matching ^[A-Z]{3,5}\d(\.\d)?[A-Z]?$ (normalize O->0, I/l->1)
-    for (let i = 0; i < lines.length; i++) {
-      if (redLineIndices.has(i)) continue;
       const matched = normalizeAndMatchSection(lines[i].text);
       if (matched) {
         sectionCandidate = matched;
@@ -426,77 +352,73 @@ export function parseScheduleEntries(
       }
     }
 
-    // Check if cell has a section line
-    if (!sectionCandidate) {
-      // Cell has no section line -> Check if it is a room-only cell
-      if (roomCandidate || redLineIndices.size > 0) {
-        const roomTxt = roomCandidate || (lines[0]?.text || '').trim();
-        roomOnlyCandidates.push({
-          cell,
-          roomText: roomTxt,
-          row: cell.row,
-          col: cell.col,
-          rowspan: cell.rowspan,
-          colspan: cell.colspan,
-        });
+    // Classification, one path:
+    if (sectionCandidate) {
+      // Section line found -> class
+      const subject = lines
+        .slice(0, sectionLineIndex)
+        .map((l) => l.text.trim())
+        .filter(Boolean)
+        .join(' ');
 
-        skippedCells.push({
-          id: cell.id,
-          row: cell.row,
-          col: cell.col,
-          rowspan: cell.rowspan,
-          colspan: cell.colspan,
-          text: cell.text,
-          reason: 'Room-only cell (awaiting merge with class cell above)',
-          isRoomOnly: true,
-        });
-      } else {
-        // Regular skipped cell
-        skippedCells.push({
-          id: cell.id,
-          row: cell.row,
-          col: cell.col,
-          rowspan: cell.rowspan,
-          colspan: cell.colspan,
-          text: cell.text,
-          reason: 'No section code matching ^[A-Z]{3,5}\\d(\\.\\d)?[A-Z]?$',
-        });
-      }
-      continue;
+      // Compile missing fields for strict highlighting (no guessing!)
+      const missingFields: string[] = [];
+      if (!subject) missingFields.push('subject');
+      if (!sectionCandidate) missingFields.push('section');
+      if (!room) missingFields.push('room');
+      if (!day) missingFields.push('day');
+      if (!startTime) missingFields.push('startTime');
+      if (!endTime) missingFields.push('endTime');
+
+      rawEntries.push({
+        id: `entry_${cell.id}`,
+        subject,
+        section: sectionCandidate,
+        room,
+        day,
+        startTime,
+        endTime,
+        row: cell.row,
+        col: cellCol,
+        rowspan: cell.rowspan,
+        colspan: cell.colspan,
+        isAdded: false,
+        missingFields,
+        rawLines: lines.map((l) => l.text),
+      });
+    } else if (room) {
+      // No section but roomText non-empty -> room-only candidate
+      roomOnlyCandidates.push({
+        cell,
+        roomText: room,
+        row: cell.row,
+        col: cellCol,
+        rowspan: cell.rowspan,
+        colspan: cell.colspan,
+      });
+
+      skippedCells.push({
+        id: cell.id,
+        row: cell.row,
+        col: cell.col,
+        rowspan: cell.rowspan,
+        colspan: cell.colspan,
+        text: cell.text,
+        reason: 'Room-only cell (awaiting merge with class cell above)',
+        isRoomOnly: true,
+      });
+    } else {
+      // Otherwise -> skipped
+      skippedCells.push({
+        id: cell.id,
+        row: cell.row,
+        col: cell.col,
+        rowspan: cell.rowspan,
+        colspan: cell.colspan,
+        text: cell.text,
+        reason: 'No section code matching ^[A-Z]{3,5}\\d(\\.\\d)?[A-Z]?$',
+      });
     }
-
-    // 3. Subject = remaining lines above the section line, joined by spaces
-    const linesAbove = lines
-      .slice(0, sectionLineIndex)
-      .filter((_, idx) => !redLineIndices.has(idx));
-
-    const subject = linesAbove.map((l) => l.text.trim()).filter(Boolean).join(' ');
-
-    // Compile missing fields for strict highlighting (no guessing!)
-    const missingFields: string[] = [];
-    if (!subject) missingFields.push('subject');
-    if (!sectionCandidate) missingFields.push('section');
-    if (!roomCandidate) missingFields.push('room');
-    if (!day) missingFields.push('day');
-    if (!startTime) missingFields.push('startTime');
-    if (!endTime) missingFields.push('endTime');
-
-    rawEntries.push({
-      id: `entry_${cell.id}`,
-      subject,
-      section: sectionCandidate,
-      room: roomCandidate,
-      day,
-      startTime,
-      endTime,
-      row: cell.row,
-      col: cellCol,
-      rowspan: cell.rowspan,
-      colspan: cell.colspan,
-      isAdded: false,
-      missingFields,
-      rawLines: lines.map((l) => l.text),
-    });
   }
 
   // =========================================================================
@@ -562,11 +484,151 @@ export function parseScheduleEntries(
       return sc;
     });
 
+  // Verification step 3: Teaching Hours footer check
+  // Read footer row labeled "TEACHING HOURS" (same row cells, same columns) and compare
+  let teachingHoursVerification: TeachingHoursVerification | undefined = undefined;
+  const footerLabelCell = cells.find((c) =>
+    /teaching\s*hours/i.test(c.text.trim())
+  );
+
+  if (footerLabelCell) {
+    const footerRow = footerLabelCell.row;
+    const dayChecks: DayTeachingHoursCheck[] = [];
+
+    const getDayHours = (dayName: string) => {
+      return rawEntries
+        .filter((e) => e.day.toLowerCase() === dayName.toLowerCase())
+        .reduce((sum, e) => {
+          const [sh, sm] = e.startTime.split(':').map(Number);
+          const [eh, em] = e.endTime.split(':').map(Number);
+          return sum + (eh * 60 + em - (sh * 60 + sm)) / 60;
+        }, 0);
+    };
+
+    // Check distinct day columns
+    const checkedDays = new Set<string>();
+    for (const [colStr, dayName] of Object.entries(dayHeaders)) {
+      const col = parseInt(colStr, 10);
+      if (col === timeColumnIndex || checkedDays.has(dayName)) continue;
+      checkedDays.add(dayName);
+
+      // Find cell in footerRow for this column
+      const fCell = cells.find(
+        (c) => c.row === footerRow && col >= c.col && col < c.col + c.colspan
+      );
+      if (!fCell) continue;
+
+      const numMatch = fCell.text.match(/(\d+(?:\.\d+)?)/);
+      if (!numMatch) continue;
+
+      const expectedHours = parseFloat(numMatch[1]);
+      let parsedHours = getDayHours(dayName);
+
+      // Fri's empty colored cell directly below a class counts as part of that class (extend end time) only when this check fails without it
+      if (parsedHours !== expectedHours && dayName.toLowerCase() === 'friday') {
+        const friEntries = rawEntries.filter((e) => e.day.toLowerCase() === 'friday');
+        for (const friEntry of friEntries) {
+          const nextRow = friEntry.row + friEntry.rowspan;
+          const emptyCell = cells.find(
+            (c) =>
+              c.row === nextRow &&
+              c.col >= friEntry.col &&
+              c.col < friEntry.col + friEntry.colspan &&
+              !c.text.trim()
+          );
+          if (emptyCell && isFilledCell(sourceCanvas, emptyCell.bbox)) {
+            const newLastRow = emptyCell.row + emptyCell.rowspan - 1;
+            const extendedEnd = rowTimeIntervals.get(newLastRow);
+            if (extendedEnd) {
+              const prevEnd = friEntry.endTime;
+              const prevSpan = friEntry.rowspan;
+              friEntry.endTime = extendedEnd.end;
+              friEntry.rowspan = newLastRow - friEntry.row + 1;
+
+              const testHours = getDayHours(dayName);
+              if (Math.abs(testHours - expectedHours) < 0.01) {
+                parsedHours = testHours;
+                // Remove empty cell from finalSkippedCells
+                const skipIdx = finalSkippedCells.findIndex((sc) => sc.id === emptyCell.id);
+                if (skipIdx !== -1) {
+                  finalSkippedCells.splice(skipIdx, 1);
+                }
+                break;
+              } else {
+                // Revert
+                friEntry.endTime = prevEnd;
+                friEntry.rowspan = prevSpan;
+              }
+            }
+          }
+        }
+      }
+
+      const matched = Math.abs(parsedHours - expectedHours) < 0.01;
+      dayChecks.push({
+        day: dayName,
+        parsedHours,
+        expectedHours,
+        matched,
+      });
+
+      if (!matched) {
+        throw new Error(
+          `Day ${dayName}: parsed ${parsedHours} h, footer says ${expectedHours} h`
+        );
+      }
+    }
+
+    teachingHoursVerification = {
+      footerFound: true,
+      footerRow,
+      dayChecks,
+      statusMessage: `Verified teaching hours across ${dayChecks.length} days: All parsed hours match footer row.`,
+    };
+  }
+
+  // Sort entries by day (Mon, Tue, Wed, Thu, Fri, Sat, Sun) and startTime
+  const DAY_ORDER: Record<string, number> = {
+    monday: 1,
+    mon: 1,
+    tuesday: 2,
+    tue: 2,
+    tues: 2,
+    wednesday: 3,
+    wed: 3,
+    thursday: 4,
+    thu: 4,
+    thur: 4,
+    thurs: 4,
+    friday: 5,
+    fri: 5,
+    saturday: 6,
+    sat: 6,
+    sunday: 7,
+    sun: 7,
+  };
+
+  rawEntries.sort((a, b) => {
+    const dayA = DAY_ORDER[a.day.toLowerCase().trim()] || 99;
+    const dayB = DAY_ORDER[b.day.toLowerCase().trim()] || 99;
+    if (dayA !== dayB) return dayA - dayB;
+    return a.startTime.localeCompare(b.startTime);
+  });
+
+  // Verification console.log of each entry after parsing (12h format)
+  console.log(`[ScheduleParser] Parsed ${rawEntries.length} entries (sorted by day):`);
+  for (const entry of rawEntries) {
+    console.log(
+      `${entry.day}: ${entry.subject} ${entry.section} ${entry.room} ${to12Hour(entry.startTime)} - ${to12Hour(entry.endTime)}`
+    );
+  }
+
   return {
     entries: rawEntries,
     skippedCells: finalSkippedCells,
     timeColumnIndex,
     timeIntervals: Array.from(rowTimeIntervals.values()),
     dayHeaders,
+    teachingHoursVerification,
   };
 }

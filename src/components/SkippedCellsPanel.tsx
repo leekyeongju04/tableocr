@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import { SkippedCell } from '../types/schedule';
+import { to12Hour } from '../utils/time';
 import { AlertCircle, ChevronDown, ChevronUp, Eye, Ban } from 'lucide-react';
 
 interface SkippedCellsPanelProps {
@@ -70,7 +71,7 @@ export const SkippedCellsPanel: React.FC<SkippedCellsPanelProps> = ({
                       [{cell.row},{cell.col}]
                     </span>
                     <span className="text-slate-200 font-sans font-medium max-w-xs truncate">
-                      "{cell.text || '[Empty Cell]'}"
+                      "{cell.text ? cell.text.replace(/\b(\d{1,2}:\d{2})\b/g, (hhmm) => to12Hour(hhmm)) : '[Empty Cell]'}"
                     </span>
                   </div>
 

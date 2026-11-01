@@ -35,6 +35,7 @@ import { TableView } from './components/TableView';
 import { JsonViewer } from './components/JsonViewer';
 import { ApkModal } from './components/ApkModal';
 import { SAMPLE_SCHEDULES } from './utils/sampleTables';
+import { to12Hour } from './utils/time';
 
 const APP_VERSION = 'v1.4.0';
 
@@ -685,6 +686,73 @@ export default function App() {
                         </div>
                       ))}
                     </div>
+                  </div>
+
+                  {/* Detected Time Row Intervals in 12H */}
+                  {result.scheduleResult?.timeIntervals && result.scheduleResult.timeIntervals.length > 0 && (
+                    <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-2">
+                      <div className="font-semibold text-slate-300 flex items-center justify-between">
+                        <span>Detected Time Row Intervals (12H):</span>
+                        <span className="text-[11px] text-slate-500 font-mono">
+                          {result.scheduleResult.timeIntervals.length} row intervals
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                        {result.scheduleResult.timeIntervals.map((interval, idx) => (
+                          <div
+                            key={idx}
+                            className="p-2 bg-slate-900/70 border border-slate-800 rounded font-mono text-[11px] text-slate-300"
+                          >
+                            <span className="text-slate-500 mr-1.5">R{interval.row}:</span>
+                            <span className="text-emerald-400 font-medium">
+                              {to12Hour(interval.start)} - {to12Hour(interval.end)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Teaching Hours Verification Check (Item 3) */}
+                  <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-2">
+                    <div className="font-semibold text-slate-300 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                        <span>Teaching Hours Footer Verification:</span>
+                      </span>
+                      {result.scheduleResult?.teachingHoursVerification ? (
+                        <span className="text-[11px] bg-emerald-950/60 text-emerald-300 border border-emerald-800/40 px-2 py-0.5 rounded font-mono">
+                          Footer Verified (Row {result.scheduleResult.teachingHoursVerification.footerRow})
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-slate-500 font-mono">
+                          No "TEACHING HOURS" footer row in active table
+                        </span>
+                      )}
+                    </div>
+
+                    {result.scheduleResult?.teachingHoursVerification ? (
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-1">
+                        {result.scheduleResult.teachingHoursVerification.dayChecks.map((dc, idx) => (
+                          <div
+                            key={idx}
+                            className="p-2 bg-slate-900/80 border border-slate-800 rounded font-mono text-[11px]"
+                          >
+                            <div className="text-slate-400 font-semibold">{dc.day}</div>
+                            <div className="text-emerald-300 mt-0.5">
+                              Parsed: {dc.parsedHours}h / Footer: {dc.expectedHours}h
+                            </div>
+                            <div className="text-[10px] text-emerald-400 mt-0.5">
+                              Matched ✓
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-slate-500">
+                        When a timetable contains a footer row labeled "TEACHING HOURS", each day's entry durations are summed and verified against the footer values.
+                      </p>
+                    )}
                   </div>
 
                   {/* Horizontal and Vertical Line Pixel Coordinates */}

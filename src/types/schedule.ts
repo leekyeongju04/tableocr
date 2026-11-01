@@ -41,10 +41,25 @@ export interface TimeInterval {
   endMinutes: number;
 }
 
+export interface DayTeachingHoursCheck {
+  day: string;
+  parsedHours: number;
+  expectedHours: number;
+  matched: boolean;
+}
+
+export interface TeachingHoursVerification {
+  footerFound: boolean;
+  footerRow?: number;
+  dayChecks: DayTeachingHoursCheck[];
+  statusMessage: string;
+}
+
 export interface ScheduleParseResult {
   entries: ScheduleEntry[];
   skippedCells: SkippedCell[];
   timeColumnIndex: number;
   timeIntervals: TimeInterval[];
   dayHeaders: Record<number, string>; // colIndex -> Day name
+  teachingHoursVerification?: TeachingHoursVerification;
 }

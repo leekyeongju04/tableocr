@@ -360,15 +360,8 @@ export async function detectGridAndCells(
     await new Promise((r) => setTimeout(r, 0));
 
     const sharedEdges: SharedEdge[] = [];
-    const threshData = threshMat.data;
 
-    // Fast direct TypedArray index check (100x faster than calling Emscripten ucharPtr in loops)
-    const isDarkPixel = (x: number, y: number): boolean => {
-      if (x < 0 || x >= W || y < 0 || y >= H) return false;
-      return threshData[y * W + x] > 128;
-    };
-
-    // 4A: Check vertical shared edges
+    // 4A: Check vertical shared edges - sample vertical line mask (vLinesMat)
     for (let r = 0; r < totalRows; r++) {
       for (let c = 0; c < totalCols - 1; c++) {
         const edgeX = verticalLines[c + 1];
@@ -385,14 +378,15 @@ export async function detectGridAndCells(
 
         for (let y = sampleStart; y <= sampleEnd; y++) {
           totalSamples++;
-          let hasDark = false;
+          let hasLine = false;
           for (let dx = -2; dx <= 2; dx++) {
-            if (isDarkPixel(edgeX + dx, y)) {
-              hasDark = true;
+            const sx = edgeX + dx;
+            if (sx >= 0 && sx < W && y >= 0 && y < H && vLinesMat.ucharPtr(y, edgeX + dx)[0] > 128) {
+              hasLine = true;
               break;
             }
           }
-          if (hasDark) darkCount++;
+          if (hasLine) darkCount++;
         }
 
         const darkPixelRatio = totalSamples > 0 ? darkCount / totalSamples : 1.0;
@@ -419,7 +413,7 @@ export async function detectGridAndCells(
       }
     }
 
-    // 4B: Check horizontal shared edges
+    // 4B: Check horizontal shared edges - sample horizontal line mask (hLinesMat)
     for (let r = 0; r < totalRows - 1; r++) {
       for (let c = 0; c < totalCols; c++) {
         const edgeY = horizontalLines[r + 1];
@@ -436,14 +430,15 @@ export async function detectGridAndCells(
 
         for (let x = sampleStart; x <= sampleEnd; x++) {
           totalSamples++;
-          let hasDark = false;
+          let hasLine = false;
           for (let dy = -2; dy <= 2; dy++) {
-            if (isDarkPixel(x, edgeY + dy)) {
-              hasDark = true;
+            const sy = edgeY + dy;
+            if (x >= 0 && x < W && sy >= 0 && sy < H && hLinesMat.ucharPtr(edgeY + dy, x)[0] > 128) {
+              hasLine = true;
               break;
             }
           }
-          if (hasDark) darkCount++;
+          if (hasLine) darkCount++;
         }
 
         const darkPixelRatio = totalSamples > 0 ? darkCount / totalSamples : 1.0;
@@ -504,6 +499,7 @@ export async function detectGridAndCells(
       mergedCells.push({
         id: `merged_${cellCounter++}`,
         text: '',
+        roomText: '',
         row: minRow,
         col: minCol,
         rowspan,

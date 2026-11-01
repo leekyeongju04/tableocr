@@ -366,7 +366,318 @@ export function createInvalidNoGridCanvas(): HTMLCanvasElement {
   return canvas;
 }
 
+/**
+ * Faculty Schedule Sample
+ * Expected 14 entries, none with 30-min duration, none with blank room:
+ * Mon: Intro to Computing LEC BSIT1.1A 205 07:00-09:00
+ *      Principles of Communication BSIT2.1C 401 11:30-13:00
+ *      Human-Computer Interaction LAB BSIT2.1C 406 13:00-15:00
+ * Tue: Web Programming LEC BMMA3.1A 406 07:00-09:00
+ *      Web Programming LAB BMMA3.1A COMLAB 4 10:00-13:00
+ *      Human-Computer Interaction LEC BSIT2.1A 201 16:30-18:30
+ * Wed: Intro to Computing LAB BSIT1.1A COMLAB 3 07:00-10:00
+ *      Principles of Communication BSIT2.1C 401 11:30-13:00
+ *      Human-Computer Interaction LAB BSIT2.1C COMLAB 4 13:00-16:00
+ * Thu: HCI LAB BSIT2.1A COMLAB 4 07:00-10:00
+ *      HCI LAB BSIT2.1B 203 Annex 10:00-12:00
+ *      HCI LAB BSIT2.1B COMLAB 4 13:00-16:00
+ * Fri: Web Programming LEC BMMA3.1B 203 14:00-16:00
+ *      Web Programming LAB BMMA3.1B MMLAB 16:00-18:00
+ * Fri 18:00-19:00 empty blue cell must appear in the skipped panel, not as a class.
+ */
+export function createFacultyScheduleCanvas(): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1100;
+  canvas.height = 1350;
+  const ctx = canvas.getContext('2d')!;
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const left = 45;
+  const top = 35;
+  const colWidths = [155, 175, 175, 175, 175, 175];
+  const xPositions: number[] = [left];
+  for (const w of colWidths) {
+    xPositions.push(xPositions[xPositions.length - 1] + w);
+  }
+
+  // Row 0 = header (height 45)
+  // Rows 1..24 = 30-min intervals (height 50 each)
+  // Row 25 = TEACHING HOURS footer row (height 45)
+  const yPositions: number[] = [top, top + 45];
+  for (let r = 1; r <= 24; r++) {
+    yPositions.push(yPositions[yPositions.length - 1] + 50);
+  }
+  yPositions.push(yPositions[yPositions.length - 1] + 45); // Row 25 footer (indices 25..26)
+
+  // Draw header row
+  const headers = ['Time', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+  ctx.fillStyle = '#0f172a';
+  ctx.font = 'bold 15px Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (let c = 0; c < 6; c++) {
+    ctx.fillText(
+      headers[c],
+      (xPositions[c] + xPositions[c + 1]) / 2,
+      (yPositions[0] + yPositions[1]) / 2
+    );
+  }
+
+  // Time row labels (7:00 AM to 7:00 PM)
+  const timeLabels = [
+    '7:00-7:30 AM',
+    '7:30-8:00 AM',
+    '8:00-8:30 AM',
+    '8:30-9:00 AM',
+    '9:00-9:30 AM',
+    '9:30-10:00 AM',
+    '10:00-10:30 AM',
+    '10:30-11:00 AM',
+    '11:00-11:30 AM',
+    '11:30-12:00 PM',
+    '12:00-12:30 PM',
+    '12:30-1:00 PM',
+    '1:00-1:30 PM',
+    '1:30-2:00 PM',
+    '2:00-2:30 PM',
+    '2:30-3:00 PM',
+    '3:00-3:30 PM',
+    '3:30-4:00 PM',
+    '4:00-4:30 PM',
+    '4:30-5:00 PM',
+    '5:00-5:30 PM',
+    '5:30-6:00 PM',
+    '6:00-6:30 PM',
+    '6:30-7:00 PM',
+  ];
+
+  ctx.font = 'bold 13px Arial, sans-serif';
+  for (let r = 1; r <= 24; r++) {
+    ctx.fillText(
+      timeLabels[r - 1],
+      (xPositions[0] + xPositions[1]) / 2,
+      (yPositions[r] + yPositions[r + 1]) / 2
+    );
+  }
+
+  // Row 25: TEACHING HOURS Footer Row
+  ctx.fillStyle = '#0f172a';
+  ctx.font = 'bold 14px Arial, sans-serif';
+  ctx.fillText(
+    'TEACHING HOURS',
+    (xPositions[0] + xPositions[1]) / 2,
+    (yPositions[25] + yPositions[26]) / 2
+  );
+
+  const footerValues = ['5.5', '7', '7.5', '8', '4'];
+  for (let c = 1; c <= 5; c++) {
+    ctx.fillText(
+      footerValues[c - 1],
+      (xPositions[c] + xPositions[c + 1]) / 2,
+      (yPositions[25] + yPositions[26]) / 2
+    );
+  }
+
+  // Helper to draw class cells with filled background
+  const drawClass = (
+    c: number,
+    startRow: number,
+    endRow: number, // inclusive
+    subject: string,
+    section: string,
+    room: string,
+    bgColor: string = '#eff6ff'
+  ) => {
+    const x0 = xPositions[c] + 2;
+    const y0 = yPositions[startRow] + 2;
+    const w = xPositions[c + 1] - xPositions[c] - 4;
+    const h = yPositions[endRow + 1] - yPositions[startRow] - 4;
+
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(x0, y0, w, h);
+
+    const xMid = (xPositions[c] + xPositions[c + 1]) / 2;
+    const yMid = (yPositions[startRow] + yPositions[endRow + 1]) / 2;
+
+    // 1. Subject (dark slate)
+    ctx.fillStyle = '#0f172a';
+    ctx.font = 'bold 13px Arial, sans-serif';
+    ctx.fillText(subject, xMid, yMid - 18);
+
+    // 2. Section code
+    ctx.fillStyle = '#1e293b';
+    ctx.font = 'bold 13px Arial, sans-serif';
+    ctx.fillText(section, xMid, yMid);
+
+    // 3. Room in Red ink (R>G+60 && R>B+60)
+    ctx.fillStyle = '#dc2626';
+    ctx.font = 'bold 13px Arial, sans-serif';
+    ctx.fillText(room, xMid, yMid + 18);
+  };
+
+  // Helper for class cell with room in adjacent cell below (room-only test)
+  const drawClassWithSeparateRoomBelow = (
+    c: number,
+    classStartRow: number,
+    classEndRow: number,
+    roomRow: number,
+    subject: string,
+    section: string,
+    room: string,
+    bgColor: string = '#f0fdf4'
+  ) => {
+    // Upper class box (without room)
+    const x0 = xPositions[c] + 2;
+    const y0 = yPositions[classStartRow] + 2;
+    const w = xPositions[c + 1] - xPositions[c] - 4;
+    const h = yPositions[classEndRow + 1] - yPositions[classStartRow] - 4;
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(x0, y0, w, h);
+
+    const xMid = (xPositions[c] + xPositions[c + 1]) / 2;
+    const yClassMid = (yPositions[classStartRow] + yPositions[classEndRow + 1]) / 2;
+    ctx.fillStyle = '#0f172a';
+    ctx.font = 'bold 13px Arial, sans-serif';
+    ctx.fillText(subject, xMid, yClassMid - 10);
+    ctx.fillStyle = '#1e293b';
+    ctx.font = 'bold 13px Arial, sans-serif';
+    ctx.fillText(section, xMid, yClassMid + 10);
+
+    // Lower room box (room-only with red text)
+    const yRoom0 = yPositions[roomRow] + 2;
+    const hRoom = yPositions[roomRow + 1] - yPositions[roomRow] - 4;
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(x0, yRoom0, w, hRoom);
+
+    const yRoomMid = (yPositions[roomRow] + yPositions[roomRow + 1]) / 2;
+    ctx.fillStyle = '#dc2626';
+    ctx.font = 'bold 13px Arial, sans-serif';
+    ctx.fillText(room, xMid, yRoomMid);
+  };
+
+  // 14 Faculty entries:
+  // Mon (Col 1)
+  drawClass(1, 1, 4, 'Intro to Computing LEC', 'BSIT1.1A', '205', '#eff6ff'); // 07:00-09:00
+  drawClass(1, 10, 12, 'Principles of Communication', 'BSIT2.1C', '401', '#f0fdf4'); // 11:30-13:00
+  drawClass(1, 13, 16, 'Human-Computer Interaction LAB', 'BSIT2.1C', '406', '#fefce8'); // 13:00-15:00
+
+  // Tue (Col 2)
+  drawClass(2, 1, 4, 'Web Programming LEC', 'BMMA3.1A', '406', '#f3e8ff'); // 07:00-09:00
+  // Web Programming LAB 10:00-13:00 with room-only cell at 12:30-13:00
+  drawClassWithSeparateRoomBelow(2, 7, 11, 12, 'Web Programming LAB', 'BMMA3.1A', 'COMLAB 4', '#ecfeff'); // 10:00-13:00
+  drawClass(2, 20, 23, 'Human-Computer Interaction LEC', 'BSIT2.1A', '201', '#ffe4e6'); // 16:30-18:30
+
+  // Wed (Col 3)
+  drawClass(3, 1, 6, 'Intro to Computing LAB', 'BSIT1.1A', 'COMLAB 3', '#eff6ff'); // 07:00-10:00
+  drawClass(3, 10, 12, 'Principles of Communication', 'BSIT2.1C', '401', '#f0fdf4'); // 11:30-13:00
+  drawClass(3, 13, 18, 'Human-Computer Interaction LAB', 'BSIT2.1C', 'COMLAB 4', '#fefce8'); // 13:00-16:00
+
+  // Thu (Col 4)
+  drawClass(4, 1, 6, 'HCI LAB', 'BSIT2.1A', 'COMLAB 4', '#fefce8'); // 07:00-10:00
+  drawClass(4, 7, 10, 'HCI LAB', 'BSIT2.1B', '203 Annex', '#fff7ed'); // 10:00-12:00
+  drawClass(4, 13, 18, 'HCI LAB', 'BSIT2.1B', 'COMLAB 4', '#fefce8'); // 13:00-16:00
+
+  // Fri (Col 5)
+  drawClass(5, 15, 18, 'Web Programming LEC', 'BMMA3.1B', '203', '#f3e8ff'); // 14:00-16:00
+  drawClass(5, 19, 22, 'Web Programming LAB', 'BMMA3.1B', 'MMLAB', '#f3e8ff'); // 16:00-18:00
+
+  // Fri 18:00-19:00 (Rows 23 and 24): Empty blue cell directly below class
+  const emptyX0 = xPositions[5] + 2;
+  const emptyY0 = yPositions[23] + 2;
+  const emptyW = xPositions[6] - xPositions[5] - 4;
+  const emptyH = yPositions[25] - yPositions[23] - 4;
+  ctx.fillStyle = '#bfdbfe'; // Light blue colored fill
+  ctx.fillRect(emptyX0, emptyY0, emptyW, emptyH);
+
+  // Draw Grid Lines (borders)
+  ctx.strokeStyle = '#000000';
+  ctx.lineWidth = 3;
+
+  // Outer border
+  ctx.strokeRect(left, top, xPositions[6] - left, yPositions[26] - top);
+
+  // Horizontal Lines
+  // yPositions[1] (header bottom)
+  ctx.beginPath();
+  ctx.moveTo(xPositions[0], yPositions[1]);
+  ctx.lineTo(xPositions[6], yPositions[1]);
+  ctx.stroke();
+
+  // Draw all row divider lines in Time column
+  for (let r = 2; r <= 24; r++) {
+    ctx.beginPath();
+    ctx.moveTo(xPositions[0], yPositions[r]);
+    ctx.lineTo(xPositions[1], yPositions[r]);
+    ctx.stroke();
+  }
+
+  // Draw outer borders for each merged block in Monday..Friday columns
+  const drawCellBorder = (c: number, rStart: number, rEnd: number) => {
+    ctx.strokeRect(
+      xPositions[c],
+      yPositions[rStart],
+      xPositions[c + 1] - xPositions[c],
+      yPositions[rEnd + 1] - yPositions[rStart]
+    );
+  };
+
+  // Mon
+  drawCellBorder(1, 1, 4);
+  drawCellBorder(1, 10, 12);
+  drawCellBorder(1, 13, 16);
+
+  // Tue
+  drawCellBorder(2, 1, 4);
+  drawCellBorder(2, 7, 11);
+  drawCellBorder(2, 12, 12); // room-only row directly below
+  drawCellBorder(2, 20, 23);
+
+  // Wed
+  drawCellBorder(3, 1, 6);
+  drawCellBorder(3, 10, 12);
+  drawCellBorder(3, 13, 18);
+
+  // Thu
+  drawCellBorder(4, 1, 6);
+  drawCellBorder(4, 7, 10);
+  drawCellBorder(4, 13, 18);
+
+  // Fri
+  drawCellBorder(5, 15, 18);
+  drawCellBorder(5, 19, 22);
+  drawCellBorder(5, 23, 24); // Empty blue cell 18:00-19:00
+
+  // Footer Row divider (yPositions[25])
+  ctx.beginPath();
+  ctx.moveTo(xPositions[0], yPositions[25]);
+  ctx.lineTo(xPositions[6], yPositions[25]);
+  ctx.stroke();
+
+  // Footer Row individual cell borders
+  for (let c = 0; c < 6; c++) {
+    drawCellBorder(c, 25, 25);
+  }
+
+  // Vertical Lines
+  for (let c = 1; c <= 5; c++) {
+    ctx.beginPath();
+    ctx.moveTo(xPositions[c], yPositions[0]);
+    ctx.lineTo(xPositions[c], yPositions[26]);
+    ctx.stroke();
+  }
+
+  return canvas;
+}
+
 export const SAMPLE_SCHEDULES: SampleSchedule[] = [
+  {
+    id: 'faculty',
+    title: 'Faculty Schedule (Sample)',
+    description: 'Faculty schedule with 14 classes, 12h times, room-only merge, and empty blue cell',
+    generate: createFacultyScheduleCanvas,
+  },
   {
     id: 'university',
     title: 'University Schedule',
@@ -386,3 +697,4 @@ export const SAMPLE_SCHEDULES: SampleSchedule[] = [
     generate: createInvalidNoGridCanvas,
   },
 ];
+
